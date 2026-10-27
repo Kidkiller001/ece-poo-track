@@ -1,20 +1,28 @@
 import json
+import sys
 from venue import Venue
 from performance import Performance
 from lineup import Lineup
 from workshop import Workshop
 from solo import Solo
 from collections import Counter
-def main():
-    with open("./data/festival.json", "r") as f:
-        data = json.load(f)
-    venues = []
+import unicodedata
+from json_connection import JsonConnection
+
+json_connection = JsonConnection()
+
+def list_artist_performances(artist_slug):
+    venues = [
+        Venue(v["name"], v["capacity"], v["address"])
+        for v in json_connection.venues
+    ]
+    
     performances = []
-    for venue in data["venues"]:
-        v= Venue(venue["name"], venue["capacity"], venue["address"])
-        venues.append(v)
-    for performance in data["performances"]:
-        if performance["kind"] == "solo":
+
+    for performance in json_connection.performances:
+        kind = performance["kind"]
+
+        if kind == "solo":
             p = Solo(
                 title=performance["title"],
                 venue=performance["venue"],
@@ -24,7 +32,8 @@ def main():
                 artist=performance["artist"],
                 min_age=performance["min_age"]
             )
-        elif performance["kind"] == "lineup":
+
+        elif kind == "lineup":
             p = Lineup(
                 title=performance["title"],
                 venue=performance["venue"],
@@ -34,7 +43,8 @@ def main():
                 host=performance["host"],
                 acts=performance["acts"]
             )
-        elif performance["kind"] == "workshop":
+
+        elif kind == "workshop":
             p = Workshop(
                 title=performance["title"],
                 venue=performance["venue"],
@@ -45,53 +55,173 @@ def main():
                 max_participants=performance["max_participants"],
                 participants=performance["participants"]
             )
+
+        else:
+            raise ValueError(f"Unknown performance kind: {kind}")
+
         performances.append(p)
-    N_solo = sum(1 for p in performances if isinstance(p, Performance) and not isinstance(p, Lineup) and not isinstance(p, Workshop))
-    N_lineup = sum(1 for p in performances if isinstance(p, Lineup))
-    N_workshop = sum(1 for p in performances if isinstance(p, Workshop))
-    le_kiosque_performances = []
-    print(f"Performances at Le Kiosque:\n")
-    for perf in performances:
-        if perf.venue == "le-kiosque":
-            le_kiosque_performances.append(perf)
-            print(f"{perf.start} {perf.title}")
-    
-    print(f"lineup:{N_lineup}\nsolo: {N_solo}\nworkshop: {N_workshop}")
-    for v in venues:
-        print(v)
-    
-    longest_performance = max(performances, key=lambda p: p.duration_minutes)
-    print(f"\nLongest {longest_performance.title} ({longest_performance.duration_minutes} mins)")
+    venue_names = {
+        slugify(venue.name): venue.name
+        for venue in venues
+    }
+
+    results = []
 
     for perf in performances:
-            if isinstance(perf, Workshop):
-                print(f"{perf.title} on {perf.start}: {len(perf.participants)}/{perf.max_participants} registered")
+        roles = []
 
-    artist_counts = Counter()
+        if isinstance(perf, Solo):
+            if slugify(perf.artist) == artist_slug:
+                roles.append("solo")
 
-    for perf in performances:
-        if isinstance(perf, Lineup):
-            artist_counts[perf.host] += 1
-            artist_counts.update(perf.acts)
+        elif isinstance(perf, Lineup):
+            if slugify(perf.host) == artist_slug:
+                roles.append("host")
+
+            for act in perf.acts:
+                if slugify(act) == artist_slug:
+                    roles.append("act")
 
         elif isinstance(perf, Workshop):
-            artist_counts[perf.teacher] += 1
+            if slugify(perf.teacher) == artist_slug:
+                roles.append("teacher")
 
-        elif isinstance(perf, Performance):
-            artist_counts[perf.artist] += 1
+        for role in roles:
+            results.append((perf, role))
 
-    if artist_counts:
-        max_count = max(artist_counts.values())
+    if not results:
+        print(f"No artist '{artist_slug}'.")
+        return
 
-        most_frequent_artists = [
-            artist
-            for artist, count in artist_counts.items()
-            if count == max_count
-        ]
+    print(artist_slug.replace("-", " ").title())
 
-        print(f"Artists on stage {max_count}: {', '.join(most_frequent_artists)}")
+    for perf, role in sorted(results, key=lambda item: item[0].start):
+        venue_name = venue_names.get(perf.venue, perf.venue)
+        date_time = perf.start[:16].replace("T", " ")
 
-            
+        print(
+            f"{date_time} | {venue_name} | "
+            f"{perf.title} ({role})"
+        )
+def list_venues():
+    venues = [
+        Venue(v["name"], v["capacity"], v["address"])
+        for v in json_connection.venues
+    ]
+
+    total_capacity = 0
+
+    for venue in venues:
+        print(
+            f"{slugify(venue.name)}: {venue.name}, "
+            f"{venue.capacity} seats"
+        )
+        total_capacity += venue.capacity
+
+    print(f"Total: {total_capacity} seats")
+
+def list_programme(day):
+    venues = [
+        Venue(v["name"], v["capacity"], v["address"])
+        for v in json_connection.venues
+    ]
+    performances = []
+    for performance in json_connection.performances:
+            kind = performance["kind"]
     
+            if kind == "solo":
+                p = Solo(
+                    title=performance["title"],
+                    venue=performance["venue"],
+                    start=performance["start"],
+                    duration_minutes=performance["duration_minutes"],
+                    description=performance["description"],
+                    artist=performance["artist"],
+                    min_age=performance["min_age"]
+                )
+    
+            elif kind == "lineup":
+                p = Lineup(
+                    title=performance["title"],
+                    venue=performance["venue"],
+                    start=performance["start"],
+                    duration_minutes=performance["duration_minutes"],
+                    description=performance["description"],
+                    host=performance["host"],
+                    acts=performance["acts"]
+                )
+    
+            elif kind == "workshop":
+                p = Workshop(
+                    title=performance["title"],
+                    venue=performance["venue"],
+                    start=performance["start"],
+                    duration_minutes=performance["duration_minutes"],
+                    description=performance["description"],
+                    teacher=performance["teacher"],
+                    max_participants=performance["max_participants"],
+                    participants=performance["participants"]
+                )
+    
+            else:
+                raise ValueError(f"Unknown performance kind: {kind}")
+    
+            performances.append(p)
+    venue_names = {
+        slugify(venue.name): venue.name
+        for venue in venues
+    }
+
+    daily_performances = [
+        perf for perf in performances
+        if perf.start[:10] == day
+    ]
+
+    if not daily_performances:
+        print(f"No performances on '{day}'.")
+        return
+
+    print(f"Programme for {day}:")
+
+    for perf in sorted(daily_performances, key=lambda p: p.start):
+        time = perf.start[11:16]
+        venue_name = venue_names.get(perf.venue, perf.venue)
+
+        if isinstance(perf, Lineup):
+            kind = "Lineup"
+        elif isinstance(perf, Workshop):
+            kind = "Workshop"
+        elif isinstance(perf, Solo):
+            kind = "Solo"
+        else:
+            kind = "Performance"
+
+        print(
+            f"{time} | {venue_name} | "
+            f"{perf.title} ({kind})"
+        )
+
+def slugify(text):
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(
+        char for char in text
+        if not unicodedata.combining(char)
+    )
+    return text.lower().replace(" ", "-")
+def main():
+    
+    command = sys.argv[1] if len(sys.argv) > 1 else None
+
+    if command == "venues":
+        list_venues()
+    elif command == "artist" and len(sys.argv) >= 3:
+        artist_slug = sys.argv[2].lower()
+        list_artist_performances(
+            artist_slug,
+        )
+    elif command == "programme" and len(sys.argv) >= 3:
+        day = sys.argv[2]
+        list_programme(day)
+
 if __name__ == "__main__":
     main()

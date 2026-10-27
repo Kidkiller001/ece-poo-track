@@ -207,22 +207,7 @@
         "maya-choukri"
       ]
     },
-    {
-      "kind": "workshop",
-      "title": "Stand-up Lab",
-      "venue": "la-cabane",
-      "start": "2027-06-12T10:30",
-      "duration_minutes": 120,
-      "description": "",
-      "teacher": "paul-kerbrat",
-      "max_participants": 10,
-      "participants": [
-        "Chloé D.",
-        "Nathan P.",
-        "Inès T.",
-        "Hugo S."
-      ]
-    },
+  
     {
       "kind": "solo",
       "title": "Brunch & Punchlines",

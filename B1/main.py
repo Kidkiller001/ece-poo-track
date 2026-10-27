@@ -6,15 +6,7 @@ from workshop import Workshop
 from solo import Solo
 from collections import Counter
 import unicodedata
-def display_venues(venues):
-    total_capacity = 0
 
-    for venue in venues:
-        slug = slugify(venue.name)
-        print(f"{slug}: {venue.name}, {venue.capacity} seats")
-        total_capacity += venue.capacity
-
-    print(f"Total: {total_capacity} seats")
 def slugify(text):
     text = unicodedata.normalize("NFKD", text)
     text = "".join(

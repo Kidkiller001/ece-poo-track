@@ -9,6 +9,10 @@ class JsonConnection:
         self.file_path = project_dir / file_path
         self._data = self._load_data()
 
+    def save(self):
+        with open(self.file_path, "w", encoding="utf-8") as file:
+            json.dump(self.data, file, indent=4, ensure_ascii=False)
+
     def _load_data(self):
         with self.file_path.open("r", encoding="utf-8") as file:
             return json.load(file)

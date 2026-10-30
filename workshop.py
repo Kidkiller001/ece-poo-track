@@ -13,3 +13,14 @@ class Workshop(Performance):
         self.teacher = teacher
         self.max_participants = max_participants
         self.participants = participants
+    def to_dict(self):
+        data = super().to_dict()
+
+        data.update({
+            "kind": "workshop",
+            "teacher": self.teacher.slug,
+            "max_participants": self.max_participants,
+            "participants": self.participants,
+        })
+
+        return data

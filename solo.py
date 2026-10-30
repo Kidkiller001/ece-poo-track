@@ -11,3 +11,13 @@ class Solo(Performance):
         )
         self.artist = artist
         self.min_age = min_age
+    def to_dict(self):
+        data = super().to_dict()
+
+        data.update({
+            "kind": "solo",
+            "artist": self.artist.slug,
+            "min_age": self.min_age,
+        })
+
+        return data

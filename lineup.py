@@ -11,3 +11,13 @@ class Lineup(Performance):
         )
         self.host = host
         self.acts = acts
+    def to_dict(self):
+        data = super().to_dict()
+
+        data.update({
+            "kind": "lineup",
+            "host": self.host.slug,
+            "acts": [artist.slug for artist in self.acts],
+        })
+
+        return data

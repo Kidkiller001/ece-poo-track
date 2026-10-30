@@ -1,7 +1,6 @@
-
 from datetime import datetime, timedelta
-import unicodedata
 
+from helper import slugify
 from solo import Solo
 from lineup import Lineup
 from workshop import Workshop
@@ -10,27 +9,37 @@ from workshop import Workshop
 MIN_GAP = timedelta(minutes=30)
 
 
-def slugify(text):
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(
-        char for char in text
-        if not unicodedata.combining(char)
-    )
-    return text.lower().replace(" ", "-")
+def _artist_slug(artist):
+    """Accept either an Artist object or a slug/name string."""
+    if hasattr(artist, "slug"):
+        return artist.slug
+    return slugify(str(artist))
 
 
 def performance_artists(performance):
-    """Return all artists involved in a performance."""
+    """Return every artist involved, represented by their slugs."""
     if isinstance(performance, Solo):
-        return {performance.artist}
+        artists = [performance.artist]
+    elif isinstance(performance, Lineup):
+        artists = [performance.host, *performance.acts]
+    elif isinstance(performance, Workshop):
+        artists = [performance.teacher]
+    else:
+        artists = []
 
-    if isinstance(performance, Lineup):
-        return {performance.host, *performance.acts}
+    return {_artist_slug(artist) for artist in artists}
 
-    if isinstance(performance, Workshop):
-        return {performance.teacher}
 
-    return set()
+def performance_venue_slug(performance):
+    venue = performance.venue
+    return venue.slug if hasattr(venue, "slug") else slugify(str(venue))
+
+
+def festival_day(start):
+    """Assign performances before 06:00 to the previous programme day."""
+    if start.hour < 6:
+        return (start - timedelta(days=1)).date()
+    return start.date()
 
 
 def validate_performance(
@@ -41,22 +50,17 @@ def validate_performance(
     first_day,
     last_day,
 ):
-    """Validate a performance and raise ValueError on failure."""
+    """Validate a performance and raise ValueError when a rule is broken."""
 
-    # Validate the venue
-    venue_by_slug = {
-        slugify(venue.name): venue.name
+    venue_slugs = {
+        venue.slug if hasattr(venue, "slug") else slugify(str(venue))
         for venue in venues
     }
+    venue_slug = performance_venue_slug(performance)
 
-    venue_slug = slugify(performance.venue)
+    if venue_slug not in venue_slugs:
+        raise ValueError(f"Unknown venue '{venue_slug}'.")
 
-    if venue_slug not in venue_by_slug:
-        raise ValueError(
-            f"Unknown venue '{performance.venue}'."
-        )
-
-    # Validate the start date and time
     try:
         start = datetime.fromisoformat(performance.start)
     except (ValueError, TypeError):
@@ -64,87 +68,77 @@ def validate_performance(
             "Start must use the format YYYY-MM-DDTHH:MM."
         ) from None
 
-    festival_start = datetime.strptime(
-        first_day, "%Y-%m-%d"
-    ).date()
-    festival_end = datetime.strptime(
-        last_day, "%Y-%m-%d"
-    ).date()
+    first = datetime.strptime(first_day, "%Y-%m-%d").date()
+    last = datetime.strptime(last_day, "%Y-%m-%d").date()
+    programme_day = festival_day(start)
 
-    if not festival_start <= start.date() <= festival_end:
+    if not first <= programme_day <= last:
         raise ValueError(
-            f"{start:%Y-%m-%d} is not a day of the festival."
+            f"{programme_day:%Y-%m-%d} is not a day of the festival."
         )
 
-    # Validate duration
+    duration = performance.duration_minutes
     if (
-        not isinstance(performance.duration_minutes, int)
-        or isinstance(performance.duration_minutes, bool)
-        or not 1 <= performance.duration_minutes <= 360
+        not isinstance(duration, int)
+        or isinstance(duration, bool)
+        or not 1 <= duration <= 360
     ):
-        raise ValueError(
-            "Duration must be between 1 and 360 minutes."
-        )
+        raise ValueError("Duration must be between 1 and 360 minutes.")
 
-    # Validate every artist, including hosts, acts and teachers
-    artist_by_slug = {
-        slugify(artist["name"]): artist["name"]
+    known_artist_slugs = {
+        artist.slug if hasattr(artist, "slug")
+        else slugify(artist["name"])
         for artist in artists
     }
+    involved = performance_artists(performance)
 
-    involved_artists = {
-        slugify(artist)
-        for artist in performance_artists(performance)
-    }
+    for slug in sorted(involved):
+        if slug not in known_artist_slugs:
+            raise ValueError(f"Unknown artist '{slug}'.")
 
-    for artist_slug in sorted(involved_artists):
-        if artist_slug not in artist_by_slug:
-            raise ValueError(
-                f"Unknown artist '{artist_slug}'."
-            )
+    end = start + timedelta(minutes=duration)
 
-    end = start + timedelta(
-        minutes=performance.duration_minutes
-    )
-
-    # Check venue availability and artist availability
     for existing in performances:
         existing_start = datetime.fromisoformat(existing.start)
         existing_end = existing_start + timedelta(
             minutes=existing.duration_minutes
         )
 
-        # A gap of exactly 30 minutes is allowed.
+        # A 30-minute gap is sufficient; overlaps or shorter gaps conflict.
         conflict = (
             start < existing_end + MIN_GAP
             and existing_start < end + MIN_GAP
         )
-
         if not conflict:
             continue
 
-        # Report venue conflicts with the existing show's details.
-        if slugify(existing.venue) == venue_slug:
-            venue_name = venue_by_slug[venue_slug]
-
+        if performance_venue_slug(existing) == venue_slug:
+            venue_name = next(
+                (
+                    v.name for v in venues
+                    if (v.slug if hasattr(v, "slug") else slugify(str(v)))
+                    == venue_slug
+                ),
+                venue_slug,
+            )
             raise ValueError(
                 f"{venue_name} is busy with {existing.title} "
                 f"({existing_start:%Y-%m-%d %H:%M}-"
                 f"{existing_end:%H:%M})."
             )
 
-        # Report the first shared artist's existing show.
-        existing_artists = {
-            slugify(artist)
-            for artist in performance_artists(existing)
-        }
-
-        shared_artists = involved_artists & existing_artists
-
-        if shared_artists:
-            artist_slug = sorted(shared_artists)[0]
-            artist_name = artist_by_slug[artist_slug]
-
+        shared = involved & performance_artists(existing)
+        if shared:
+            slug = sorted(shared)[0]
+            artist_name = next(
+                (
+                    a.name if hasattr(a, "name") else a["name"]
+                    for a in artists
+                    if (a.slug if hasattr(a, "slug")
+                        else slugify(a["name"])) == slug
+                ),
+                slug,
+            )
             raise ValueError(
                 f"{artist_name} is on stage in {existing.title}."
             )

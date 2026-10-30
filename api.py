@@ -1,69 +1,24 @@
-
-from datetime import date, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from json_connection import JsonConnection
-from festival_repository import FestivalRepository
-
-from solo import Solo
-from lineup import Lineup
-from workshop import Workshop
+from festival import get_default_festival
 
 
-# ---------------------------------------------------------
-# APPLICATION INITIALIZATION
-# ---------------------------------------------------------
-
-app = FastAPI(
-    title="Deauville Festival du Rire 2027"
-)
-
-json_connection = JsonConnection()
-festival_repository = FestivalRepository(json_connection)
+app = FastAPI(title="Deauville Festival du Rire 2027")
 
 
-# ---------------------------------------------------------
-# SERIALIZATION HELPERS
-# ---------------------------------------------------------
+def get_domain():
+    return get_default_festival()
+
 
 def serialize_performance(performance):
-    """
-    Convert a performance object into JSON-compatible data.
-
-    Relationships are represented by slugs rather than
-    returning entire Artist and Venue objects.
-    """
-
-    result = performance.to_dict()
-
-    # Common attributes
-    result["venue"] = performance.venue.slug
-
-    # Type-specific attributes
-    if isinstance(performance, Solo):
-        result["kind"] = "solo"
-        result["artist"] = performance.artist.slug
-
-    elif isinstance(performance, Lineup):
-        result["kind"] = "lineup"
-        result["host"] = performance.host.slug
-        result["acts"] = [
-            artist.slug for artist in performance.acts
-        ]
-
-    elif isinstance(performance, Workshop):
-        result["kind"] = "workshop"
-        result["teacher"] = performance.teacher.slug
-
-    return result
+    return performance.to_dict()
 
 
 def serialize_venue(venue):
-    """Convert a Venue object into JSON-compatible data."""
-
     return {
         "slug": venue.slug,
         "name": venue.name,
@@ -73,135 +28,85 @@ def serialize_venue(venue):
 
 
 def serialize_artist(artist):
-    """Convert an Artist object into JSON-compatible data."""
-
     return artist.to_dict()
 
 
-# ---------------------------------------------------------
-# FESTIVAL
-# ---------------------------------------------------------
-
 @app.get("/api/festival")
 def get_festival():
-    data = json_connection.data
-
-    first_day = date.fromisoformat(data["first_day"])
-    last_day = date.fromisoformat(data["last_day"])
-
-    days = [
-        (first_day + timedelta(days=i)).isoformat()
-        for i in range((last_day - first_day).days + 1)
-    ]
-
     return {
-        "name": data["name"],
-        "first_day": first_day.isoformat(),
-        "last_day": last_day.isoformat(),
-        "days": days,
+        "name": get_domain().name,
+        "first_day": get_domain().first_day.isoformat(),
+        "last_day": get_domain().last_day.isoformat(),
+        "days": [day.isoformat() for day in get_domain().days],
     }
 
 
-# ---------------------------------------------------------
-# VENUES
-# ---------------------------------------------------------
-
 @app.get("/api/venues")
 def get_venues():
-    return [
-        serialize_venue(venue)
-        for venue in festival_repository.venues
-    ]
+    return [serialize_venue(v) for v in get_domain().venues]
 
-
-# ---------------------------------------------------------
-# ARTISTS
-# ---------------------------------------------------------
 
 @app.get("/api/artists")
 def get_artists():
-    artists = sorted(
-        festival_repository.artists.values(),
-        key=lambda artist: artist.slug
-    )
-
-    return [
-        serialize_artist(artist)
-        for artist in artists
-    ]
+    artists = sorted(get_domain().artists.values(), key=lambda a: a.slug)
+    return [serialize_artist(a) for a in artists]
 
 
 @app.get("/api/artists/{slug}")
 def get_artist(slug: str):
-    artist = festival_repository.get_artist(slug)
-
+    artist = get_domain().get_artist(slug)
     if artist is None:
         raise HTTPException(
             status_code=404,
-            detail=f"No artist found with slug '{slug}'."
+            detail=f"No artist found with slug '{slug}'.",
         )
-
     result = serialize_artist(artist)
-
     result["performances"] = [
-        serialize_performance(performance)
-        for performance in (
-            festival_repository.performances_for_artist(slug)
-        )
+        serialize_performance(p)
+        for p in get_domain().performances_for_artist(slug)
     ]
-
     return result
 
 
-# ---------------------------------------------------------
-# PROGRAMME
-# ---------------------------------------------------------
-
 @app.get("/api/programme")
-def get_programme(
-    day: date | None = None,
-    venue: str | None = None,
-):
-    performances = festival_repository.list_performances(
-        day=day,
-        venue=venue,
-    )
-
+def get_programme(day: date | None = None, venue: str | None = None):
     return [
-        serialize_performance(performance)
-        for performance in performances
+        serialize_performance(p)
+        for p in get_domain().programme(day=day, venue=venue)
     ]
 
 
-# ---------------------------------------------------------
-# INDIVIDUAL PERFORMANCES
-# ---------------------------------------------------------
-
-@app.get("/api/performances/{performance_id}")
-def get_performance(performance_id: str):
-    performance = festival_repository.get_performance(
-        performance_id
-    )
-
+@app.get("/api/performances/{performance_id_value}")
+def get_performance(performance_id_value: str):
+    performance = get_domain().get_performance(performance_id_value)
     if performance is None:
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"No performance found with id '{performance_id}'."
-            )
+            detail=f"No performance found with id '{performance_id_value}'.",
         )
-
     return serialize_performance(performance)
 
 
-# ---------------------------------------------------------
-# FRONTEND
-# ---------------------------------------------------------
+@app.get("/api/now")
+def get_now(at: str | None = None):
+    try:
+        moment = datetime.fromisoformat(at) if at else datetime.now()
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="'at' must be a valid ISO datetime.",
+        ) from None
+
+    return {
+        "now_playing": [
+            serialize_performance(p) for p in get_domain().now_playing(moment)
+        ],
+        "up_next": [
+            serialize_performance(p) for p in get_domain().up_next(moment, limit=3)
+        ],
+    }
+
 
 public_dir = Path(__file__).resolve().parent / "web" / "public"
-
-app.mount(
-    "/",
-    StaticFiles(directory=public_dir, html=True),
-    name="web"
-)
+if public_dir.exists():
+    app.mount("/", StaticFiles(directory=public_dir, html=True), name="web")
